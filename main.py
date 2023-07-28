@@ -11,7 +11,7 @@ from datetime import datetime
 from langchain.callbacks import get_openai_callback
 
 how_it_work = """\
-TBD
+Please provide details of your project and I will ask you some question if needed.
 """
 
 extract_facts_prompt_template = """/
@@ -37,8 +37,8 @@ Project team provides you numerated list of facts:
 {facts}
 ###
 Your task is to find a Yes or No answer to each question based on the facts provided. 
-But if there is no answer in the given facts, the answer should be set to "None".
-If there are two conflicting answers to a question, the answer should be "Issue".
+Don't try to make up an answer, if there is no DIRECT answer in the given facts, the answer should be set to "None".
+If there are two conflicting answers to a question, the answer should be "Clash" and you should add a detailed explanation of the problem.
 You should also include an explanation as to why you are responding this way.
 ###
 Provide your output in json format with the keys: 
@@ -74,12 +74,15 @@ QUESTIONS = [
 
 ### -------------- Sessions
 
+SESSTION_INIT_INFO_PROVIDED = 'init_info_provided'
 SESSTION_COLLECTED_DIALOG = 'collected_dialog'
 SESSTION_SYSTEM_QUESTION_INDEX = 'system_question_index'
 SESSION_SAVED_USER_INPUT = 'saved_user_input'
 SESSION_TOKEN_COUNT = 'token_count'
 SESSTION_COLLECTED_ANSWERS = 'collected_answers'
 
+if SESSTION_INIT_INFO_PROVIDED not in st.session_state:
+    st.session_state[SESSTION_INIT_INFO_PROVIDED] = False
 if SESSTION_COLLECTED_DIALOG not in st.session_state:
     st.session_state[SESSTION_COLLECTED_DIALOG] = []
 if SESSTION_SYSTEM_QUESTION_INDEX not in st.session_state:
@@ -154,9 +157,11 @@ def show_current_question():
     else:
         question_container.markdown(f'Please provide details of your project', unsafe_allow_html=True)
 
-def get_next_question_index():
-    index = st.session_state[SESSTION_SYSTEM_QUESTION_INDEX]
-    return index+1
+def get_next_question_index(init_info_provided, current_index):
+    if init_info_provided:
+        return current_index+1
+    else:
+        return -1
 
 ### -------------- LLM and chains
 
@@ -180,11 +185,12 @@ score_chain  = LLMChain(llm=llm, prompt = score_prompt)
 
 show_current_question()
 
-user_input = st.session_state[SESSION_SAVED_USER_INPUT]
-if user_input:
-    system_question = get_question_by_index(st.session_state[SESSTION_SYSTEM_QUESTION_INDEX])
+user_input = str(st.session_state[SESSION_SAVED_USER_INPUT]).strip()
+if len(user_input) > 0:
+    question_index  = st.session_state[SESSTION_SYSTEM_QUESTION_INDEX]
+    system_question = get_question_by_index(question_index)
 
-    debug_container.markdown('Starting LLM...')
+    debug_container.markdown('Starting LLM to extract facts...')
     with get_openai_callback() as cb:
         facts_from_dialog = extract_facts_chain.run(question = system_question, answer = user_input)
     st.session_state[SESSION_TOKEN_COUNT] += cb.total_tokens
@@ -202,12 +208,11 @@ if user_input:
         row = [datetime.now(), system_question, user_input, facts_from_dialog, 1]
     st.session_state[SESSTION_COLLECTED_DIALOG].append(row)
 
-    # find next dialog
-    st.session_state[SESSTION_SYSTEM_QUESTION_INDEX] = get_next_question_index()
+    if question_index == -1: # initial information was provided
+        st.session_state[SESSTION_INIT_INFO_PROVIDED] = True
 
     # move to the next dialog
     st.session_state[SESSION_SAVED_USER_INPUT] = ""
-    show_current_question()
 
 # collected dialog
 dfc = pd.DataFrame(st.session_state[SESSTION_COLLECTED_DIALOG], columns = ['Time', 'Question', 'Answer', 'Facts', 'Error'])
@@ -222,7 +227,7 @@ collected_fact_list_str = get_numerated_list_string(collected_fact_list)
 collected_facts_container.markdown(collected_fact_list_str)
 
 # extract answers from facts
-debug_container.markdown('Starting LLM...')
+debug_container.markdown('Starting LLM to extract answers...')
 with get_openai_callback() as cb:
     score_result = score_chain.run(questions = get_numerated_list_string(QUESTIONS), facts = collected_fact_list_str)
 st.session_state[SESSION_TOKEN_COUNT] += cb.total_tokens
@@ -240,8 +245,13 @@ try:
     st.session_state[SESSTION_COLLECTED_ANSWERS] = dfa
     # show answers
     clarifications_container.dataframe(dfa, use_container_width=True, hide_index=True)
-except:
-    clarifications_container.markdown(f'Error parsing answers. JSON:\n{score_result}')
+except Exception as error:
+    clarifications_container.markdown(f'Error parsing answers. JSON:\n{score_result}\n\n{error}')
+
+# find next dialog
+st.session_state[SESSTION_SYSTEM_QUESTION_INDEX] = get_next_question_index(st.session_state[SESSTION_INIT_INFO_PROVIDED], st.session_state[SESSTION_SYSTEM_QUESTION_INDEX])
+
+show_current_question()
 
 token_count_container.markdown(f'Tokens used: {st.session_state[SESSION_TOKEN_COUNT]}')
 
