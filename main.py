@@ -9,68 +9,14 @@ from langchain.chains import LLMChain
 from langchain.cache import SQLiteCache
 from datetime import datetime
 from langchain.callbacks import get_openai_callback
+from tree import get_step_by_tree, Step
+from tree_json import QUESTIONS
+from main_prompt import extract_facts_prompt_template, score_prompt_template
+from main_utils import get_numerated_list_string
 
 how_it_work = """\
 Please provide details of your project and I will ask you some question if needed.
 """
-
-extract_facts_prompt_template = """/
-You are an advanced solution architect for an IT project.
-Your job is to convert the question and answer (separated by XML tags) into one or more useful facts.
-You must ignore all information that is not relevant to the IT project architecture (e.g. greetings, polite words, etc.)
-For each fact you should add a score of relevance from 0 to 1 (0 - not relevant, 1 - fully relevant).
-
-Provide answer in JSON format with fields: 
-- it_project_facts - list of extracted facts that are relevant to the IT project architecture with score
-- other_facts - list of other facts that are not relevant to the IT project architecture with score
-
-<question>{question}</question>
-<answer>{answer}</answer>
-"""
-
-score_prompt_template = """/
-You are an advanced solution architect for an IT project.
-You have numerated list of questions:
-{questions}
-###
-Project team provides you numerated list of facts:
-{facts}
-###
-Your task is to find a Yes or No answer to each question based on the facts provided. 
-Don't try to make up an answer, if there is no DIRECT answer in the given facts, the answer should be set to "None".
-If there are two conflicting answers to a question, the answer should be "Clash" and you should add a detailed explanation of the problem.
-You should also include an explanation as to why you are responding this way.
-###
-Provide your output in json format with the keys: 
-- QuestionID - ID of question
-- Answer - answer
-- Explanation - explanation of answer
-- RefFacts - list of facts related to the answer
-
-Example output:
-[ 
-{{"QuestionID": 1, "Answer": "Yes",  "Explanation": "Answer based on facts 1 and 3.", "RefFacts": [1, 3]}},
-{{"QuestionID": 2, "Answer": "None", "Explanation": "There is no answer in provided facts.", "RefFacts": [] }},
-{{"QuestionID": 2, "Answer": "Issue", "Explanation": "There are two conflicting answers in facts 2 and 6.", "RefFacts": [2, 6] }}
-]
-"""
-
-QUESTIONS = [
-    'Is it migration or build new project?',
-    'Do you require full control to the environment?',
-    'Is project already cloud optimized?',
-    'Can project be containerized?',
-    'High-performance computing (HPC) workload?',
-    'Using Spring Boot apps?',
-    'Is it commercial off-the-shelf (COTS) software?',
-    'Event-driven workload with short-jived processes?',
-    'Managed web hosting platform and features?',
-    'Need full-fledged orchestration?',
-    'Need a managed service?',
-    'Familiar with Service Fabric or older .NET Framework?',
-    'Using Red Hat Openshift?',
-    'Need access to Kubernetes API?'
-]
 
 ### -------------- Sessions
 
@@ -80,6 +26,7 @@ SESSTION_SYSTEM_QUESTION_INDEX = 'system_question_index'
 SESSION_SAVED_USER_INPUT = 'saved_user_input'
 SESSION_TOKEN_COUNT = 'token_count'
 SESSTION_COLLECTED_ANSWERS = 'collected_answers'
+SESSTION_DOCUMENT_FOUND = 'document_found'
 
 if SESSTION_INIT_INFO_PROVIDED not in st.session_state:
     st.session_state[SESSTION_INIT_INFO_PROVIDED] = False
@@ -93,6 +40,8 @@ if SESSION_TOKEN_COUNT not in st.session_state:
     st.session_state[SESSION_TOKEN_COUNT] = 0
 if SESSTION_COLLECTED_ANSWERS not in st.session_state:
     st.session_state[SESSTION_COLLECTED_ANSWERS] = None
+if SESSTION_DOCUMENT_FOUND not in st.session_state:
+    st.session_state[SESSTION_DOCUMENT_FOUND] = None
 
 def submit_user_input():
     st.session_state[SESSION_SAVED_USER_INPUT] = st.session_state.user_input
@@ -122,7 +71,7 @@ with st.sidebar:
 
 header_container.markdown(how_it_work, unsafe_allow_html=True)
 
-def get_json(text):
+def get_json(text : str) -> str:
     text = text.replace(", ]", "]").replace(",]", "]").replace(",\n]", "]")
     open_bracket = min(text.find('['), text.find('{'))
     if open_bracket == -1:
@@ -133,35 +82,38 @@ def get_json(text):
         return text
     return text[open_bracket:close_bracket+1]
 
-def get_numerated_list(l):
-    result = []
-    for index, row in enumerate(l):
-        result.append(f'{index+1}. {row}')
-    return result
-
-def get_numerated_list_string(l):
-    result = get_numerated_list(l)
-    return '\n'.join(result)
-
-def get_question_by_index(index):
+def get_question_by_index(index : int) -> str:
     result = ""
     if index != -1:
         result = QUESTIONS[index]
     return result
 
-def show_current_question():
-    index = st.session_state[SESSTION_SYSTEM_QUESTION_INDEX]
-    question = get_question_by_index(index)
-    if index != -1:
-        question_container.markdown(f'<b>Question:</b> [{index+1}] {question}', unsafe_allow_html=True)
-    else:
-        question_container.markdown(f'Please provide details of your project', unsafe_allow_html=True)
+def show_current_question_or_answer():
+    index    = st.session_state[SESSTION_SYSTEM_QUESTION_INDEX]
+    document = st.session_state[SESSTION_DOCUMENT_FOUND]
 
-def get_next_question_index(init_info_provided, current_index):
-    if init_info_provided:
-        return current_index+1
+    if document:
+        question_container.markdown(f'<b>Document:</b> {document}', unsafe_allow_html=True)
     else:
-        return -1
+        question = get_question_by_index(index)
+        if index != -1:
+            question_container.markdown(f'<b>Question:</b> [{index+1}] {question}', unsafe_allow_html=True)
+        else:
+            question_container.markdown(f'Please provide details of your project', unsafe_allow_html=True)
+
+def get_answer_by_ID(dfa, id):
+    answer = dfa[dfa['#'] == id].values[0]
+    return answer[2]
+
+def get_next_step() -> Step:
+    init_info_provided = st.session_state[SESSTION_INIT_INFO_PROVIDED]
+    # columns = ['#', 'Question', 'Answer', 'Explanation', 'References']
+    dfa = (pd.DataFrame)(st.session_state[SESSTION_COLLECTED_ANSWERS])
+    if init_info_provided and not dfa.empty:
+        step = get_step_by_tree(dfa, get_answer_by_ID)
+        return Step(step.question_id, step.document)
+    else:
+        return Step(0, None)
 
 ### -------------- LLM and chains
 
@@ -183,7 +135,7 @@ score_chain  = LLMChain(llm=llm, prompt = score_prompt)
 # We are working on the project, we need to host a new publicly facing website, Tech used ReactJS, APIs, DB with 3 environment  
 ### ----------------------------------------------------------------------------------------------
 
-show_current_question()
+show_current_question_or_answer()
 
 user_input = str(st.session_state[SESSION_SAVED_USER_INPUT]).strip()
 if len(user_input) > 0:
@@ -248,59 +200,16 @@ try:
 except Exception as error:
     clarifications_container.markdown(f'Error parsing answers. JSON:\n{score_result}\n\n{error}')
 
-# find next dialog
-st.session_state[SESSTION_SYSTEM_QUESTION_INDEX] = get_next_question_index(st.session_state[SESSTION_INIT_INFO_PROVIDED], st.session_state[SESSTION_SYSTEM_QUESTION_INDEX])
-
-show_current_question()
-
 token_count_container.markdown(f'Tokens used: {st.session_state[SESSION_TOKEN_COUNT]}')
 
-# if user_input:
-#     # extract facts from question and user anwer
-#     debug_container.markdown('Starting LLM...')
-#     facts_from_dialog = extract_facts_chain.run(question = system_question, answer = user_input)
-#     debug_container.markdown('Done.')
-#     new_fact_list = []
-#     try:
-#         facts_from_dialog_json = json.loads(get_json(facts_from_dialog))['it_project_facts']
-#         new_fact_list = [f['fact'] for f in facts_from_dialog_json]
-#         # extracted fact list, no errors
-#         row = [datetime.now(), system_question, user_input, new_fact_list, 0]
-#     except:
-#         # register error
-#         row = [datetime.now(), system_question, user_input, facts_from_dialog, 1]
-#     st.session_state[SESSTION_COLLECTED_FACTS].append(row)
+# find next dialog
+next_step = get_next_step()
+if next_step.document:
+    st.session_state[SESSTION_DOCUMENT_FOUND] = next_step.document
+    st.session_state[SESSTION_SYSTEM_QUESTION_INDEX] = -1
+else:
+    st.session_state[SESSTION_DOCUMENT_FOUND] = None
+    st.session_state[SESSTION_SYSTEM_QUESTION_INDEX] = next_step.question_id-1
+show_current_question_or_answer()
 
-#     # extract flags based on collected facts
-#     dfc = pd.DataFrame(st.session_state[SESSTION_COLLECTED_FACTS], columns = ['Time', 'Question', 'Answer', 'Facts', 'Error'])
-#     collected_dialog_container.dataframe(dfc, use_container_width=True, hide_index=True)
-
-#     collected_fact_list = []
-#     for f in dfc[dfc['Error'] == 0].values:
-#         collected_fact_list.extend(f[3])
-#     collected_fact_list =list(set(collected_fact_list))    
-#     collected_fact_list_str = get_numerated_list_string(collected_fact_list)
-#     collected_facts_container.markdown(collected_fact_list_str)
-#     score_result = score_chain.run(questions = get_numerated_list_string(QUESTIONS), facts = collected_fact_list_str)
-#     score_result_json = json.loads(get_json(score_result))
-
-#     # show answers
-#     answer_list = []
-#     for a in score_result_json:
-#         question_index = int(a["QuestionID"])
-#         question_str   = QUESTIONS[question_index-1]
-#         answer_list.append([question_index, question_str, a["Answer"], a["Explanation"], a["RefFacts"]])
-#     dfa = pd.DataFrame(answer_list, columns = ['#', 'Question', 'Answer', 'Explanation', 'References'])
-#     clarifications_container.dataframe(dfa, use_container_width=True, hide_index=True)
-
-#     # find next unanswered question
-#     unanswered = dfa[dfa['Answer'] == 'None']
-#     if unanswered.values.any():
-#         first_unanswered = unanswered.values[0]
-#         first_unanswered_index = first_unanswered[0]-1
-#         clarifications_container.markdown(first_unanswered_index)
-#         st.session_state[SESSTION_SYSTEM_QUESTION_INDEX] = first_unanswered_index
-#     else:
-#         clarifications_container.markdown("We have all answers")
-#         st.session_state[SESSTION_SYSTEM_QUESTION_INDEX] = -1
 
