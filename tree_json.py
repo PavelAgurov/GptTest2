@@ -17,14 +17,14 @@ QUESTIONS = [
     'Do you need access to Kubernetes API?'
 ]
 
-tree_json = {
+tree_json = { # Yes/No nodes or Document name
         1: Node.path_node(3, 2),
         2: Node.path_node(100, 5),
         3: Node.path_node(5, 4),
         4: Node.path_node(6, 7),
         5: Node.path_node(101, 6),
         6: Node.path_node(102, 8),
-        7: Node.path_node(110, 111),
+        7: Node.path_node(111, 110),
         8: Node.path_node(103, 9),
         9: Node.path_node(104, 10),
         10: Node.path_node(11, 105),

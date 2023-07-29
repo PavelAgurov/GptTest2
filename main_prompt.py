@@ -23,18 +23,19 @@ Project team provides you numerated list of facts:
 Your task is to find a Yes or No answer to each question based on the facts provided. 
 Don't try to make up an answer, if there is no DIRECT answer in the given facts, the answer should be set to "None".
 If there are two conflicting answers to a question, the answer should be "Clash" and you should add a detailed explanation of the problem.
-You should also include an explanation as to why you are responding this way.
+You should also include spep by step explanation as to why you are responding this way.
 ###
 Provide your output in json format with the keys: 
 - QuestionID - ID of question
 - Answer - answer
-- Explanation - explanation of answer
+- Explanation - explanation of answer, do not repeat question, but explain in details reasons of answer
+- Score - score of your confidence in the answer from 0 to 1 (0 - not sure, 1 - absolutely sure)
 - RefFacts - list of facts related to the answer
 
 Example output:
 [ 
-{{"QuestionID": 1, "Answer": "Yes",  "Explanation": "Answer based on facts 1 and 3.", "RefFacts": [1, 3]}},
-{{"QuestionID": 2, "Answer": "None", "Explanation": "There is no answer in provided facts.", "RefFacts": [] }},
-{{"QuestionID": 2, "Answer": "Issue", "Explanation": "There are two conflicting answers in facts 2 and 6.", "RefFacts": [2, 6] }}
+{{"QuestionID": 1, "Answer": "Yes",  "Explanation": "Answer based on facts 1 and 3.", "Score": 1, "RefFacts": [1, 3]}},
+{{"QuestionID": 2, "Answer": "None", "Explanation": "There is no answer in provided facts.", "Score": 0.5, "RefFacts": [] }},
+{{"QuestionID": 2, "Answer": "Issue", "Explanation": "There are two conflicting answers in facts 2 and 6.", "Score": 0.7, "RefFacts": [2, 6] }}
 ]
 """

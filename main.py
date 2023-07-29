@@ -192,8 +192,8 @@ try:
     for a in score_result_json:
         question_index = int(a["QuestionID"])
         question_str   = QUESTIONS[question_index-1]
-        answer_list.append([question_index, question_str, a["Answer"], a["Explanation"], a["RefFacts"]])
-    dfa = pd.DataFrame(answer_list, columns = ['#', 'Question', 'Answer', 'Explanation', 'References'])
+        answer_list.append([question_index, question_str, a["Answer"], a["Explanation"], a["RefFacts"], a["Score"]])
+    dfa = pd.DataFrame(answer_list, columns = ['#', 'Question', 'Answer', 'Explanation', 'References', 'Score'])
     st.session_state[SESSTION_COLLECTED_ANSWERS] = dfa
     # show answers
     clarifications_container.dataframe(dfa, use_container_width=True, hide_index=True)
